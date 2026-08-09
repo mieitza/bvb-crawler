@@ -18,8 +18,8 @@ WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
 
-# Install Playwright system deps + browser binary matching the npm-installed version.
-RUN npx playwright install --with-deps chromium \
+# Install Playwright system deps + both chromium and headless shell.
+RUN npx playwright install --with-deps chromium chromium-headless-shell \
  && rm -rf /var/lib/apt/lists/*
 
 COPY . .
