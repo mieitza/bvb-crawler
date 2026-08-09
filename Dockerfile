@@ -7,25 +7,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev || npm install --omit=dev
+COPY package.json ./
+RUN npm install --omit=dev
 
 # ── runtime stage ──
 FROM node:22-bookworm-slim
+
+# Must set PLAYWRIGHT_BROWSERS_PATH BEFORE installing browsers.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
 
-# Install Playwright system deps + both chromium and headless shell.
-RUN npx playwright install --with-deps chromium chromium-headless-shell \
+# Install Playwright system deps + chromium browser to /ms-playwright.
+RUN npx playwright install --with-deps chromium \
  && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
 ENV NODE_ENV=production
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV PORT=8080
 
 EXPOSE 8080
