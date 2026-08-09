@@ -1,5 +1,5 @@
 # ── build stage ──
-FROM node:20-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ \
@@ -11,7 +11,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev || npm install --omit=dev
 
 # ── runtime stage ──
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
 # Playwright system dependencies for Chromium.
 RUN npx --yes playwright@1.47.0 install --with-deps chromium \
