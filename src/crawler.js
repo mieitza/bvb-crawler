@@ -303,7 +303,15 @@ export async function runCrawl(symbolFilter) {
   const startedAt = Date.now();
   console.log(`[crawl] starting at ${new Date().toISOString()}`);
 
-  const symbols = await discoverSymbols();
+  let symbols;
+  try {
+    symbols = await discoverSymbols();
+  } catch (err) {
+    console.error(`[crawl] discoverSymbols failed: ${err.message}`);
+    console.error(err.stack);
+    await closeBrowser();
+    return { total: 0, ok: 0, failed: 0, error: err.message };
+  }
   if (!symbols.length) {
     console.error('[crawl] discoverSymbols returned 0 symbols — aborting');
     await closeBrowser();
