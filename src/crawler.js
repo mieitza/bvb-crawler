@@ -39,21 +39,41 @@ export async function discoverSymbols() {
     console.log(`[discover] networkidle failed, retrying with domcontentloaded: ${e.message}`);
     await page.goto(SHARES_LIST, { waitUntil: 'domcontentloaded' });
   }
-  // Wait for the table to appear. BVB renders it server-side but may have a loading state.
-  try {
-    await page.waitForSelector('table tbody tr, table tr', { timeout: NAV_TIMEOUT });
-  } catch (e) {
-    console.log(`[discover] table selector not found, trying generic: ${e.message}`);
-    await page.waitForTimeout(3000);
-  }
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(5000);
 
-  const rows = await page.$$eval('table tbody tr, table tr', (trs) =>
-    trs
-      .map((tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent.trim()))
-      .filter((cells) => cells.length >= 2 && /RO|CY|AT|NL|[A-Z]{2}/.test(cells[0]))
-  ).catch(() => []);
-  console.log(`[discover] found ${rows.length} raw rows`);
+  // Try multiple selectors — BVB may use table, div grid, or load via AJAX.
+  let rows = [];
+  try {
+    rows = await page.$$eval('table tbody tr, table tr', (trs) =>
+      trs
+        .map((tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent.trim()))
+        .filter((cells) => cells.length >= 2 && /RO|CY|AT|NL|[A-Z]{2}/.test(cells[0]))
+    );
+  } catch (e) {}
+  console.log(`[discover] found ${rows.length} raw rows from table`);
+
+  // If no table rows, try div-based layout (BVB may use a JS grid).
+  if (!rows.length) {
+    try {
+      // Dump first 2000 chars of page text for debugging.
+      const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 2000));
+      console.log(`[discover] page text preview: ${bodyText.slice(0, 500)}`);
+      // Try to find symbol-like patterns in links or data attributes.
+      const links = await page.$$eval('a[href*="FinancialInstrumentsDetails"]', (as) =>
+        as.map((a) => ({ href: a.href, text: a.textContent.trim() })).filter((a) => a.text)
+      );
+      console.log(`[discover] found ${links.length} detail-page links`);
+      if (links.length) {
+        for (const link of links) {
+          const m = link.href.match(/s=([^&]+)/);
+          const symbol = m ? m[1] : link.text.split(/\s+/)[0];
+          if (symbol) rows.push([symbol, link.text]);
+        }
+      }
+    } catch (e) {
+      console.log(`[discover] fallback extraction failed: ${e.message}`);
+    }
+  }
 
   await page.close();
 
