@@ -226,7 +226,7 @@ export async function fetchCompany(symbol, seed = {}) {
     // Wait for the price block to render (ASP.NET partial).
     await page.waitForFunction(() => document.body.textContent.includes('Simbol:'), { timeout: NAV_TIMEOUT }).catch(() => {});
     await page.waitForTimeout(2000);
-    company = await page.evaluate(({ symbol, seed }) => parseInPage(symbol, seed), { symbol, seed });
+    company = await page.evaluate(parseInPage, { symbol, seed });
     company.raw_html = await page.content();
   } catch (err) {
     console.error(`[fetch] ${symbol} error: ${err.message}`);
