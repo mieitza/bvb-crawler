@@ -7,6 +7,21 @@ const BVB = 'https://www.bvb.ro';
 const SHARES_LIST = `${BVB}/FinancialInstruments/Markets/Shares`;
 const DETAILS = (s) => `${BVB}/FinancialInstruments/Details/FinancialInstrumentsDetails.aspx?s=${encodeURIComponent(s)}`;
 
+// Realistic browser UA to avoid WAF blocking.
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const EXTRA_HTTP_HEADERS = {
+  'Accept-Language': 'ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Sec-Ch-Ua': '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+};
+
 const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY || 3);
 const NAV_TIMEOUT = Number(process.env.CRAWL_TIMEOUT || 60000);
 const HEADFUL = process.env.CRAWL_HEADFUL === '1';
@@ -27,10 +42,71 @@ export async function closeBrowser() {
   if (browser) { await browser.close(); browser = null; }
 }
 
+// ── Discover symbols via BVB download endpoint (Excel) ──────────────────
+// BVB provides a downloadable list at /FinancialInstruments/Markets/SharesListForDownload.ashx
+// This may bypass the WAF that blocks the HTML page.
+async function discoverSymbolsViaDownload() {
+  const browser = await launchBrowser();
+  const page = await browser.newPage({ userAgent: UA, extraHTTPHeaders: EXTRA_HTTP_HEADERS });
+  await page.setDefaultNavigationTimeout(NAV_TIMEOUT);
+  const downloadUrl = `${BVB}/FinancialInstruments/Markets/SharesListForDownload.ashx?filetype=excel`;
+  console.log(`[discover] trying download: ${downloadUrl}`);
+  try {
+    const resp = await page.goto(downloadUrl, { waitUntil: 'domcontentloaded' });
+    const contentType = await resp?.headerValue('content-type') || '';
+    console.log(`[discover] download response content-type: ${contentType}`);
+    if (contentType.includes('excel') || contentType.includes('spreadsheet') || contentType.includes('octet-stream')) {
+      const body = await resp?.body();
+      if (body) {
+        // The Excel file is HTML-based (old .xls format). Parse it as HTML.
+        const html = body.toString('utf-8');
+        return parseSymbolsFromExcelHtml(html);
+      }
+    }
+    // If not Excel, the page might be the WAF block page.
+    const text = await page.evaluate(() => document.body.innerText.slice(0, 200));
+    console.log(`[discover] download page text: ${text}`);
+  } catch (e) {
+    console.error(`[discover] download failed: ${e.message}`);
+  } finally {
+    await page.close();
+  }
+  return [];
+}
+
+// Parse the BVB Excel-HTML format to extract symbols.
+function parseSymbolsFromExcelHtml(html) {
+  // The old .xls format is HTML with <table> rows.
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+  const symbols = [];
+  let m;
+  while ((m = rowRegex.exec(html)) !== null) {
+    const cells = [];
+    let cm;
+    while ((cm = cellRegex.exec(m[1])) !== null) {
+      cells.push(cm[1].replace(/<[^>]*>/g, '').trim());
+    }
+    if (cells.length >= 2) {
+      const symbol = cells[0];
+      if (symbol && /^[A-Z0-9]{1,10}$/.test(symbol) && symbol !== 'Symbol') {
+        symbols.push({
+          symbol,
+          isin: cells.find((c) => /^[A-Z]{2}[A-Z0-9]{9}\d$/.test(c)) || null,
+          name: cells[1] || null,
+          category: null,
+        });
+      }
+    }
+  }
+  console.log(`[discover] parsed ${symbols.length} symbols from Excel download`);
+  return symbols;
+}
+
 // ── Discover all listed symbols from the Shares market page ──────────────
 export async function discoverSymbols() {
   const browser = await launchBrowser();
-  const page = await browser.newPage({ viewport: { width: 1366, height: 1200 } });
+  const page = await browser.newPage({ viewport: { width: 1366, height: 1200 }, userAgent: UA, extraHTTPHeaders: EXTRA_HTTP_HEADERS });
   await page.setDefaultNavigationTimeout(NAV_TIMEOUT);
   console.log(`[discover] ${SHARES_LIST}`);
   try {
@@ -40,6 +116,15 @@ export async function discoverSymbols() {
     await page.goto(SHARES_LIST, { waitUntil: 'domcontentloaded' });
   }
   await page.waitForTimeout(5000);
+
+  // Check if the page was blocked by WAF.
+  const bodyText = await page.evaluate(() => document.body.innerText);
+  if (bodyText.includes('Web Page Blocked') || bodyText.includes('Attack ID')) {
+    console.error('[discover] BVB WAF blocked the request. Trying alternative approach.');
+    await page.close();
+    // Fallback: try the BVB download endpoint (Excel/CSV) which may not be blocked.
+    return discoverSymbolsViaDownload();
+  }
 
   // Try multiple selectors — BVB may use table, div grid, or load via AJAX.
   let rows = [];
@@ -119,7 +204,7 @@ export async function discoverSymbols() {
 // ── Parse one company detail page ───────────────────────────────────────
 export async function fetchCompany(symbol, seed = {}) {
   const browser = await launchBrowser();
-  const page = await browser.newPage({ viewport: { width: 1366, height: 1200 } });
+  const page = await browser.newPage({ viewport: { width: 1366, height: 1200 }, userAgent: UA, extraHTTPHeaders: EXTRA_HTTP_HEADERS });
   await page.setDefaultNavigationTimeout(NAV_TIMEOUT);
   const url = DETAILS(symbol);
   console.log(`[fetch] ${symbol} → ${url}`);
