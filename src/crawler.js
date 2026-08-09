@@ -33,17 +33,27 @@ export async function discoverSymbols() {
   const page = await browser.newPage({ viewport: { width: 1366, height: 1200 } });
   await page.setDefaultNavigationTimeout(NAV_TIMEOUT);
   console.log(`[discover] ${SHARES_LIST}`);
-  await page.goto(SHARES_LIST, { waitUntil: 'networkidle' });
-  // The table is server-rendered. Wait for the first row to appear.
-  await page.waitForSelector('table tbody tr, table tr', { timeout: NAV_TIMEOUT });
-  // Some BVB pages load rows async — give a short settle.
-  await page.waitForTimeout(1500);
+  try {
+    await page.goto(SHARES_LIST, { waitUntil: 'networkidle' });
+  } catch (e) {
+    console.log(`[discover] networkidle failed, retrying with domcontentloaded: ${e.message}`);
+    await page.goto(SHARES_LIST, { waitUntil: 'domcontentloaded' });
+  }
+  // Wait for the table to appear. BVB renders it server-side but may have a loading state.
+  try {
+    await page.waitForSelector('table tbody tr, table tr', { timeout: NAV_TIMEOUT });
+  } catch (e) {
+    console.log(`[discover] table selector not found, trying generic: ${e.message}`);
+    await page.waitForTimeout(3000);
+  }
+  await page.waitForTimeout(2000);
 
   const rows = await page.$$eval('table tbody tr, table tr', (trs) =>
     trs
       .map((tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent.trim()))
       .filter((cells) => cells.length >= 2 && /RO|CY|AT|NL|[A-Z]{2}/.test(cells[0]))
-  );
+  ).catch(() => []);
+  console.log(`[discover] found ${rows.length} raw rows`);
 
   await page.close();
 
@@ -294,12 +304,17 @@ export async function runCrawl(symbolFilter) {
   console.log(`[crawl] starting at ${new Date().toISOString()}`);
 
   const symbols = await discoverSymbols();
+  if (!symbols.length) {
+    console.error('[crawl] discoverSymbols returned 0 symbols — aborting');
+    await closeBrowser();
+    return { total: 0, ok: 0, failed: 0 };
+  }
   const targets = symbolFilter
     ? symbols.filter((s) => s.symbol === symbolFilter)
     : symbols;
 
   if (!targets.length) {
-    console.warn('[crawl] no symbols to fetch');
+    console.warn(`[crawl] no targets matching filter "${symbolFilter}"`);
     await closeBrowser();
     return { total: 0, ok: 0, failed: 0 };
   }
