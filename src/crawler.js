@@ -36,6 +36,14 @@ export async function discoverSymbols() {
   return result;
 }
 
+// Convert "DD.MM.YYYY" → "YYYY-MM-DD" for Postgres date columns.
+function toIsoDate(raw) {
+  if (!raw) return null;
+  const m = raw.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (!m) return null;
+  return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+}
+
 // ── Fetch a single company's full details + persist to Supabase ────────
 export async function fetchAndPersist(seed) {
   const symbol = seed.symbol;
@@ -54,6 +62,7 @@ export async function fetchAndPersist(seed) {
     }));
 
     // Upsert company.
+    let companyOk = true;
     const { error: coErr } = await supabase.from('companies').upsert({
       symbol: data.symbol,
       isin: data.isin || seed.isin || null,
@@ -66,39 +75,41 @@ export async function fetchAndPersist(seed) {
       total_shares: data.total_shares ?? null,
       nominal_value: data.nominal_value ?? null,
       share_capital: data.share_capital ?? null,
-      trading_start: data.trade_start_date || null,
+      trading_start: toIsoDate(data.trade_start_date),
       vektor: null,
       shareholders,
       details_url: `https://www.bvb.ro/FinancialInstruments/Details/FinancialInstrumentsDetails.aspx?s=${encodeURIComponent(data.symbol)}`,
       crawled_at: new Date().toISOString(),
     }, { onConflict: 'symbol' });
-    if (coErr) console.error(`[persist] ${symbol} company upsert failed:`, coErr.message);
+    if (coErr) { console.error(`[persist] ${symbol} company upsert failed:`, coErr.message); companyOk = false; }
 
-    // Insert price snapshot.
-    const { error: snapErr } = await supabase.from('price_snapshots').insert({
-      symbol: data.symbol,
-      price: p.price ?? m.reference_price ?? null,
-      variation_pct: p.var_pct ?? null,
-      reference_price: m.reference_price ?? null,
-      open_price: p.open ?? null,
-      max_price: p.max ?? null,
-      min_price: p.min ?? null,
-      avg_price: p.avg ?? null,
-      volume: p.volume ?? null,
-      value_ron: p.value_ron ?? null,
-      trades: p.trades ?? null,
-      market_cap: m.market_cap ?? null,
-      per: m.pe_ratio ?? null,
-      pbv: m.pbv ?? null,
-      eps: m.eps ?? null,
-      div_yield: m.div_yield ?? null,
-      dividend: m.dividend ?? null,
-      price_datetime: p.date ? `${p.date}T00:00:00Z` : (m.as_of ? `${m.as_of}T00:00:00Z` : null),
-      captured_at: new Date().toISOString(),
-    });
-    if (snapErr) console.error(`[persist] ${symbol} snapshot insert failed:`, snapErr.message);
+    // Insert price snapshot (only if company upsert succeeded, to satisfy FK).
+    if (companyOk) {
+      const { error: snapErr } = await supabase.from('price_snapshots').insert({
+        symbol: data.symbol,
+        price: p.price ?? m.reference_price ?? null,
+        variation_pct: p.var_pct ?? null,
+        reference_price: m.reference_price ?? null,
+        open_price: p.open ?? null,
+        max_price: p.max ?? null,
+        min_price: p.min ?? null,
+        avg_price: p.avg ?? null,
+        volume: p.volume ?? null,
+        value_ron: p.value_ron ?? null,
+        trades: p.trades ?? null,
+        market_cap: m.market_cap ?? null,
+        per: m.pe_ratio ?? null,
+        pbv: m.pbv ?? null,
+        eps: m.eps ?? null,
+        div_yield: m.div_yield ?? null,
+        dividend: m.dividend ?? null,
+        price_datetime: p.date ? `${toIsoDate(p.date)}T00:00:00Z` : (m.as_of ? `${toIsoDate(m.as_of)}T00:00:00Z` : null),
+        captured_at: new Date().toISOString(),
+      });
+      if (snapErr) console.error(`[persist] ${symbol} snapshot insert failed:`, snapErr.message);
+    }
 
-    return { symbol, ok: true };
+    return { symbol, ok: companyOk };
   } catch (err) {
     console.error(`[fetch] ${symbol} error: ${err.message}`);
     return { symbol, ok: false, error: err.message };
