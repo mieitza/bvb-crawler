@@ -103,7 +103,10 @@ export async function fetchAndPersist(seed) {
         eps: m.eps ?? null,
         div_yield: m.div_yield ?? null,
         dividend: m.dividend ?? null,
-        price_datetime: p.date ? `${toIsoDate(p.date)}T00:00:00Z` : (m.as_of ? `${toIsoDate(m.as_of)}T00:00:00Z` : null),
+        price_datetime: (() => {
+        const d = toIsoDate(p.date) || toIsoDate(m.as_of);
+        return d ? `${d}T00:00:00Z` : null;
+      })(),
         captured_at: new Date().toISOString(),
       });
       if (snapErr) console.error(`[persist] ${symbol} snapshot insert failed:`, snapErr.message);
