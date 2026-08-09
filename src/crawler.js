@@ -110,11 +110,21 @@ export async function discoverSymbols() {
   const page = await browser.newPage({ viewport: { width: 1366, height: 1200 }, userAgent: UA, extraHTTPHeaders: EXTRA_HTTP_HEADERS });
   await page.setDefaultNavigationTimeout(NAV_TIMEOUT);
   console.log(`[discover] ${SHARES_LIST}`);
-  try {
-    await page.goto(SHARES_LIST, { waitUntil: 'networkidle' });
-  } catch (e) {
-    console.log(`[discover] networkidle failed, retrying with domcontentloaded: ${e.message}`);
-    await page.goto(SHARES_LIST, { waitUntil: 'domcontentloaded' });
+  let pageLoaded = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await page.goto(SHARES_LIST, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+      pageLoaded = true;
+      break;
+    } catch (e) {
+      console.log(`[discover] attempt ${attempt} failed: ${e.message}`);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 10000 * attempt));
+    }
+  }
+  if (!pageLoaded) {
+    console.error('[discover] All attempts failed. Trying Excel download fallback.');
+    await page.close();
+    return discoverSymbolsViaDownload();
   }
   await page.waitForTimeout(5000);
 
