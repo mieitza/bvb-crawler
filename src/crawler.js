@@ -22,9 +22,10 @@ const EXTRA_HTTP_HEADERS = {
   'Upgrade-Insecure-Requests': '1',
 };
 
-const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY || 3);
+const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY || 1);
 const NAV_TIMEOUT = Number(process.env.CRAWL_TIMEOUT || 60000);
 const HEADFUL = process.env.CRAWL_HEADFUL === '1';
+const DELAY_BETWEEN_FETCHES = Number(process.env.CRAWL_DELAY || 3000);
 
 let browser;
 
@@ -210,12 +211,12 @@ export async function fetchCompany(symbol, seed = {}) {
   console.log(`[fetch] ${symbol} → ${url}`);
   let company;
   try {
-    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('body', { timeout: NAV_TIMEOUT });
     // Wait for the price block to render (ASP.NET partial).
     await page.waitForFunction(() => document.body.textContent.includes('Simbol:'), { timeout: NAV_TIMEOUT }).catch(() => {});
-    await page.waitForTimeout(800);
-    company = await page.evaluate(parseInPage, symbol, seed);
+    await page.waitForTimeout(2000);
+    company = await page.evaluate(({ symbol, seed }) => parseInPage(symbol, seed), { symbol, seed });
     company.raw_html = await page.content();
   } catch (err) {
     console.error(`[fetch] ${symbol} error: ${err.message}`);
@@ -227,7 +228,7 @@ export async function fetchCompany(symbol, seed = {}) {
 }
 
 // This function runs in the browser context. `seed` is the discovery info.
-function parseInPage(symbol, seed) {
+function parseInPage({ symbol, seed }) {
   const txt = document.body.innerText;
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -434,8 +435,12 @@ export async function runCrawl(symbolFilter) {
 
   const limiter = pLimit(CONCURRENCY);
   let ok = 0, failed = 0;
+  let fetchIndex = 0;
   const tasks = targets.map((seed) =>
     limiter(async () => {
+      // Stagger requests to avoid BVB rate-limiting / WAF blocks.
+      const wait = (fetchIndex++) * DELAY_BETWEEN_FETCHES;
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       try {
         const company = await fetchCompany(seed.symbol, seed);
         await persistCompany(company);
