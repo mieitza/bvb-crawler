@@ -1,0 +1,18 @@
+{
+  "name": "bvb-crawler",
+  "version": "1.0.0",
+  "description": "Crawls bvb.ro for all listed companies and stores them in Supabase.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "crawl": "node src/index.js",
+    "schema": "node src/schema.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "playwright": "^1.47.0",
+    "p-limit": "^5.0.0"
+  }
+}
