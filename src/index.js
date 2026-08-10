@@ -4,6 +4,8 @@ import { supabase } from './supabase.js';
 
 const PORT = process.env.PORT || 8080;
 const RUN_ON_START = process.env.RUN_ON_START !== '0';
+// Cron schedule in "HH:MM" (UTC). Default 18:00 UTC = 21:00 EET (after BVB close).
+const CRAWL_TIME = process.env.CRAWL_TIME || '18:00';
 
 let crawling = false;
 let lastResult = null;
@@ -21,12 +23,34 @@ async function handleCrawl(symbol) {
   }
 }
 
+// ── Daily scheduler ─────────────────────────────────────────────────────
+function scheduleDaily() {
+  const [hh, mm] = CRAWL_TIME.split(':').map(Number);
+  function nextRun() {
+    const now = new Date();
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, 0, 0));
+    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+    return next;
+  }
+  function arm() {
+    const delay = nextRun().getTime() - Date.now();
+    console.log(`[scheduler] next crawl at ${CRAWL_TIME} UTC (in ${(delay / 1000 / 60).toFixed(0)} min)`);
+    setTimeout(async () => {
+      console.log(`[scheduler] starting scheduled crawl at ${new Date().toISOString()}`);
+      await handleCrawl(null);
+      console.log(`[scheduler] scheduled crawl done:`, lastResult);
+      arm(); // re-arm for the next day
+    }, delay);
+  }
+  arm();
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   res.setHeader('Content-Type', 'application/json');
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    res.end(JSON.stringify({ status: 'ok', crawling, lastResult, time: new Date().toISOString() }));
+    res.end(JSON.stringify({ status: 'ok', crawling, lastResult, crawlTime: CRAWL_TIME, time: new Date().toISOString() }));
     return;
   }
 
@@ -55,6 +79,8 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, async () => {
   console.log(`[server] listening on :${PORT}`);
+  console.log(`[scheduler] daily crawl scheduled for ${CRAWL_TIME} UTC`);
+  scheduleDaily();
   if (RUN_ON_START) {
     console.log('[server] RUN_ON_START=1 → starting backfill crawl');
     await handleCrawl(null);
